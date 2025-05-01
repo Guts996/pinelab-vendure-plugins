@@ -27,6 +27,8 @@ export const adminSchema = gql`
     public: Boolean!
     name: String!
     templateString: String
+    # Add channels field to expose the relationship
+    channels: [Channel!]!
   }
 
   input PDFTemplateInput {
@@ -34,6 +36,8 @@ export const adminSchema = gql`
     enabled: Boolean!
     public: Boolean!
     templateString: String!
+    # Add channelIds input to support assigning templates to multiple channels
+    channelIds: [ID!]
   }
 
   extend type Mutation {

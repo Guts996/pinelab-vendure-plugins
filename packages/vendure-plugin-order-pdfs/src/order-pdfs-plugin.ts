@@ -9,7 +9,6 @@ import path from 'path';
 import { OrderPDFsService } from './api/order-pdfs.service';
 import {
   PDFTemplateAdminResolver,
-  pdfDownloadPermission,
 } from './api/pdf-template-admin-resolver';
 import { adminSchema, shopSchema } from './api/schema.graphql';
 import { OrderPDFsController } from './api/order-pdfs.controller';
@@ -17,6 +16,7 @@ import { LoadDataFn, defaultLoadDataFn } from './load-data-fn';
 import { PLUGIN_INIT_OPTIONS } from './constants';
 import { PDFTemplateEntity } from './api/pdf-template.entity';
 import { PDFTemplateShopResolver } from './api/pdf-template-shop-resolver';
+import { CreatePdfTemplates, DeletePdfTemplates, DownloadPdf, ReadPdfTemplates, UpdatePdfTemplates } from './api/order-pdfs-permissions';
 
 export interface PDFTemplatePluginOptions {
   /**
@@ -50,7 +50,7 @@ export interface PDFTemplatePluginOptions {
     resolvers: [PDFTemplateShopResolver],
   },
   configuration: (config: RuntimeVendureConfig) => {
-    config.authOptions.customPermissions.push(pdfDownloadPermission);
+    config.authOptions.customPermissions.push(ReadPdfTemplates, CreatePdfTemplates, UpdatePdfTemplates, DeletePdfTemplates, DownloadPdf);
     return config;
   },
   compatibility: '>=2.2.0',

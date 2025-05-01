@@ -10,6 +10,12 @@ import {
   RequestContext,
   TransactionalConnection,
   UserInputError,
+  ForbiddenError,
+  EntityNotFoundError,
+  ChannelService,
+  ListQueryBuilder,
+  ChannelAware,
+  Channel,
 } from '@vendure/core';
 import { createReadStream, ReadStream } from 'fs';
 import Handlebars from 'handlebars';
@@ -24,12 +30,22 @@ import {
 } from './file.util';
 import { PDFTemplateEntity } from './pdf-template.entity';
 import puppeteer, { Browser } from 'puppeteer';
+import { In } from 'typeorm';
 
+/**
+ * Service responsible for managing PDF template entities and generating PDFs
+ * from templates for orders.
+ * 
+ * Follows Vendure's patterns for channel-aware entity management.
+ * @see https://docs.vendure.io/guides/developer-guide/channels/
+ */
 @Injectable()
 export class OrderPDFsService {
   constructor(
     private readonly connection: TransactionalConnection,
     private readonly orderService: OrderService,
+    private readonly channelService: ChannelService, // Add ChannelService
+    private readonly listQueryBuilder: ListQueryBuilder, // Add ListQueryBuilder
     private moduleRef: ModuleRef,
     @Inject(PLUGIN_INIT_OPTIONS)
     private options: PDFTemplatePluginOptions
@@ -42,83 +58,253 @@ export class OrderPDFsService {
     });
   }
 
+  /**
+   * Creates a new PDF template and assigns it to the specified channels.
+   * If no channels specified, assigns to the current channel.
+   * 
+   * @param ctx - The request context
+   * @param input - Template input data including optional channel IDs
+   */
+  async createPDFTemplate(
+    ctx: RequestContext,
+    input: PdfTemplateInput
+  ): Promise<PDFTemplateEntity> {
+    const repository = this.connection.getRepository(ctx, PDFTemplateEntity);
+
+    // Check for duplicate name in current channel
+    const qb = repository.createQueryBuilder('template')
+      .leftJoin('template.channels', 'channel')
+      .where('template.name = :name', { name: input.name })
+      .andWhere('channel.id = :channelId', { channelId: ctx.channelId });
+
+    const existing = await qb.getOne();
+
+    if (existing) {
+      throw new UserInputError(
+        `A PDF template with name '${input.name}' already exists in this channel`
+      );
+    }
+
+    // Create the new template entity
+    const newTemplate = new PDFTemplateEntity({
+      name: input.name,
+      enabled: input.enabled,
+      public: input.public,
+      templateString: input.templateString,
+    });
+
+    // Assign to current channel (always include current channel)
+    await this.channelService.assignToCurrentChannel(newTemplate, ctx);
+
+    // Save to get an ID
+    const savedTemplate = await repository.save(newTemplate);
+
+    // If additional channels specified, assign to those as well
+    if (input.channelIds && input.channelIds.length > 0) {
+      // Filter out current channel ID to avoid duplicates
+      const additionalChannelIds = input.channelIds.filter(
+        id => id.toString() !== ctx.channelId?.toString()
+      );
+
+      if (additionalChannelIds.length > 0) {
+        await this.channelService.assignToChannels(
+          ctx,
+          PDFTemplateEntity,
+          savedTemplate.id,
+          additionalChannelIds
+        );
+      }
+    }
+
+    const freshTemplate = await this.connection.findOneInChannel(
+      ctx,
+      PDFTemplateEntity,
+      savedTemplate.id,
+      ctx.channelId,
+      { relations: ['channels'] }
+    );
+    if (!freshTemplate) {
+      throw new EntityNotFoundError('PDFTemplateEntity', savedTemplate.id);
+    }
+    return freshTemplate;
+  }
+
+  /**
+   * Updates an existing PDF template, possibly changing its channel associations.
+   * 
+   * @param ctx - The request context
+   * @param id - The ID of the template to update
+   * @param input - The input data for the update
+   */
   async updateTemplate(
     ctx: RequestContext,
     id: ID,
     input: PdfTemplateInput
   ): Promise<PDFTemplateEntity> {
     const repository = this.connection.getRepository(ctx, PDFTemplateEntity);
-    const existing = await repository.findOneOrFail({
-      where: { channelId: ctx.channelId as string, id },
-    });
-    if (existing) {
-      await repository.update(existing.id, {
-        name: input.name,
-        enabled: input.enabled,
-        public: input.public,
-        templateString: input.templateString,
-      });
-    }
-    return await repository.findOneOrFail({
-      where: { channelId: ctx.channelId as string, id },
-    });
-  }
 
-  async createPDFTemplate(
-    ctx: RequestContext,
-    input: PdfTemplateInput
-  ): Promise<PDFTemplateEntity> {
-    const repository = this.connection.getRepository(ctx, PDFTemplateEntity);
-    const existing = await repository.findOne({
-      where: { channelId: ctx.channelId as string, name: input.name },
-    });
-    if (existing) {
-      throw new UserInputError(
-        `A PDF template with name '${input.name}' already exists`
-      );
+    // Find the template in the current channel
+    const existing = await this.connection.findOneInChannel(
+      ctx,
+      PDFTemplateEntity,
+      id,
+      ctx.channelId,
+      { relations: ['channels'] }
+    );
+
+    if (!existing) {
+      throw new EntityNotFoundError('PDFTemplateEntity', id);
     }
-    const result = await repository.save({
+
+    // Update basic properties
+    const updated = await repository.save({
+      ...existing,
       name: input.name,
       enabled: input.enabled,
       public: input.public,
       templateString: input.templateString,
-      channelId: ctx.channelId as string,
     });
-    return await repository.findOneOrFail({
-      where: { channelId: ctx.channelId as string, id: result.id },
-    });
+
+    // Handle channel assignments if provided
+    if (input.channelIds && input.channelIds.length > 0) {
+      // Get current channel associations
+      const currentChannels = await this.connection
+        .getRepository(ctx, PDFTemplateEntity)
+        .createQueryBuilder('template')
+        .relation('channels')
+        .of(id)
+        .loadMany();
+
+      const currentChannelIds = currentChannels.map(channel => channel.id.toString());
+
+      // Always ensure current channel is included
+      const targetChannelIds = [...new Set([
+        ctx.channelId?.toString(),
+        ...input.channelIds.map(id => id.toString())
+      ])];
+
+      // Calculate channels to add and remove
+      const channelsToAdd = targetChannelIds.filter(
+        cid => !currentChannelIds.includes(cid)
+      );
+
+      const channelsToRemove = currentChannelIds.filter(
+        cid => !targetChannelIds.includes(cid) && cid !== ctx.channelId?.toString()
+      );
+
+      // Add new channels
+      if (channelsToAdd.length > 0) {
+        await this.channelService.assignToChannels(
+          ctx,
+          PDFTemplateEntity,
+          id,
+          channelsToAdd
+        );
+      }
+
+      // Remove channels that are no longer needed
+      if (channelsToRemove.length > 0) {
+        await this.channelService.removeFromChannels(
+          ctx,
+          PDFTemplateEntity,
+          id,
+          channelsToRemove
+        );
+      }
+    }
+
+    // Return the updated entity with channels
+    const freshTemplate = await this.connection.findOneInChannel(
+      ctx,
+      PDFTemplateEntity,
+      id,
+      ctx.channelId,
+      { relations: ['channels'] }
+    );
+    if (!freshTemplate) {
+      throw new EntityNotFoundError('PDFTemplateEntity', id);
+    }
+    return freshTemplate;
   }
 
+  /**
+   * Deletes a PDF template from the current channel.
+   * If this is the last channel, removes the template entirely.
+   * 
+   * @param ctx - The request context
+   * @param id - The ID of the template to delete
+   */
   async deletePDFTemplate(
     ctx: RequestContext,
     id: ID
   ): Promise<PDFTemplateEntity[]> {
     const repository = this.connection.getRepository(ctx, PDFTemplateEntity);
-    const existing = await repository.findOneOrFail({
-      where: { channelId: ctx.channelId as string, id },
-    });
+
+    // Find the template in the current channel
+    const existing = await this.connection.findOneInChannel(
+      ctx,
+      PDFTemplateEntity,
+      id,
+      ctx.channelId,
+      { relations: ['channels'] }
+    );
+
     if (!existing) {
-      throw new UserInputError(`No PDF template with id '${id}' exists`);
+      throw new EntityNotFoundError('PDFTemplateEntity', id);
     }
-    await repository.delete({ id });
-    return await this.getTemplates(ctx);
+
+    // If this template exists in more than one channel, just remove from current channel
+    if (existing.channels.length > 1) {
+      await this.channelService.removeFromChannels(
+        ctx,
+        PDFTemplateEntity,
+        id,
+        [ctx.channelId]
+      );
+    } else {
+      // If this is the only channel, delete the entire template
+      await repository.remove(existing);
+    }
+
+    // Return updated list of templates for this channel
+    return this.getTemplates(ctx);
   }
 
+  /**
+   * Gets all PDF templates available in the current channel.
+   * 
+   * @param ctx - The request context
+   */
   async getTemplates(ctx: RequestContext): Promise<PDFTemplateEntity[]> {
-    const repository = this.connection.getRepository(ctx, PDFTemplateEntity);
-    return await repository.find({
-      where: { channelId: ctx.channelId as string },
-    });
+    // Use listQueryBuilder to properly handle channel filtering
+    // The options parameter accepts take, skip, sort, filter but not relations directly
+    const qb = this.listQueryBuilder
+      .build(PDFTemplateEntity, {}, { ctx, channelId: ctx.channelId });
+
+    // Add relations manually to the QueryBuilder
+    qb.leftJoinAndSelect('entity.channels', 'channel');
+
+    // Return array of entities
+    return qb.getMany();
   }
 
+  /**
+   * Finds a specific template by ID within the current channel.
+   * 
+   * @param ctx - The request context
+   * @param id - The ID of the template to find
+   */
   async findTemplate(
     ctx: RequestContext,
     id: ID
-  ): Promise<PDFTemplateEntity | undefined | null> {
-    const repository = this.connection.getRepository(ctx, PDFTemplateEntity);
-    return await repository.findOne({
-      where: { channelId: ctx.channelId as string, id },
-    });
+  ): Promise<PDFTemplateEntity | undefined> {
+    return this.connection.findOneInChannel(
+      ctx,
+      PDFTemplateEntity,
+      id,
+      ctx.channelId,
+      { relations: ['channels'] }
+    );
   }
 
   /**
@@ -163,7 +349,7 @@ export class OrderPDFsService {
     }
     const template = await this.findTemplate(ctx, templateId);
     if (!template) {
-      throw Error(`No template found with name '${templateId}'`);
+      throw Error(`No template found with id '${templateId}'`);
     }
     const pdfData = await Promise.all(
       orders.map(async (order) => {

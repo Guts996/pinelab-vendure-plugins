@@ -14,18 +14,14 @@ import {
   UpdatePdfTemplateMutationVariables,
 } from '../ui/generated/graphql';
 import { OrderPDFsService } from './order-pdfs.service';
-
-export const pdfDownloadPermission = new PermissionDefinition({
-  name: 'AllowPDFDownload',
-  description: 'Allow this user to download PDF templates',
-});
+import { CreatePdfTemplates, DeletePdfTemplates, ReadPdfTemplates, UpdatePdfTemplates } from './order-pdfs-permissions';
 
 @Resolver()
 export class PDFTemplateAdminResolver {
-  constructor(private readonly service: OrderPDFsService) {}
+  constructor(private readonly service: OrderPDFsService) { }
 
   @Mutation()
-  @Allow(pdfDownloadPermission.Permission)
+  @Allow(CreatePdfTemplates.Permission)
   async createPDFTemplate(
     @Ctx() ctx: RequestContext,
     @Args() args: CreatePdfTemplateMutationVariables
@@ -34,7 +30,7 @@ export class PDFTemplateAdminResolver {
   }
 
   @Mutation()
-  @Allow(pdfDownloadPermission.Permission)
+  @Allow(UpdatePdfTemplates.Permission)
   async updatePDFTemplate(
     @Ctx() ctx: RequestContext,
     @Args() args: UpdatePdfTemplateMutationVariables
@@ -43,7 +39,7 @@ export class PDFTemplateAdminResolver {
   }
 
   @Mutation()
-  @Allow(pdfDownloadPermission.Permission)
+  @Allow(DeletePdfTemplates.Permission)
   async deletePDFTemplate(
     @Ctx() ctx: RequestContext,
     @Args() args: DeletePdfTemplateMutationVariables
@@ -52,7 +48,7 @@ export class PDFTemplateAdminResolver {
   }
 
   @Query()
-  @Allow(pdfDownloadPermission.Permission)
+  @Allow(ReadPdfTemplates.Permission)
   async pdfTemplates(@Ctx() ctx: RequestContext): Promise<PdfTemplateList> {
     const result = await this.service.getTemplates(ctx);
     return {

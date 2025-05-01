@@ -85,7 +85,7 @@ export default [
       id: 'pdf-templates',
       label: 'PDF Templates',
       routerLink: ['/extensions/pdf-templates'],
-      requiresPermission: 'AllowPDFDownload',
+      requiresPermission: 'ReadPdfTemplates',
       icon: 'printer',
     },
     'settings'
@@ -95,7 +95,7 @@ export default [
     locationId: 'order-detail',
     label: 'Download PDF',
     icon: 'printer',
-    requiresPermission: 'AllowPDFDownload',
+    requiresPermission: 'DownloadPdf',
     hasDivider: true,
     onClick: async (event, context) => {
       const order = await firstValueFrom(context.entity$);
@@ -129,7 +129,7 @@ export default [
     location: 'order-list',
     label: 'Download PDF',
     icon: 'printer',
-    requiresPermission: 'AllowPDFDownload',
+    requiresPermission: 'DownloadPdf',
     onClick: async ({ injector, selection }) => {
       const dataService = injector.get(DataService);
       const templateNames = await getEnabledTemplates(dataService);

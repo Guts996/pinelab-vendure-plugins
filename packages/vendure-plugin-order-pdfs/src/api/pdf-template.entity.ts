@@ -1,15 +1,16 @@
-import { Column, Entity, ColumnType } from 'typeorm';
-import { DeepPartial, Logger, VendureEntity } from '@vendure/core';
+import { Column, Entity, ColumnType, ManyToMany, JoinTable } from 'typeorm';
+import { Channel, ChannelAware, DeepPartial, Logger, VendureEntity } from '@vendure/core';
 import { loggerCtx } from '../constants';
 
 @Entity('pdf_template')
-export class PDFTemplateEntity extends VendureEntity {
+export class PDFTemplateEntity extends VendureEntity implements ChannelAware {
   constructor(input?: DeepPartial<PDFTemplateEntity>) {
     super(input);
   }
 
-  @Column()
-  channelId!: string;
+  @ManyToMany(() => Channel)
+  @JoinTable()
+  channels: Channel[] = [];
 
   @Column()
   name!: string;

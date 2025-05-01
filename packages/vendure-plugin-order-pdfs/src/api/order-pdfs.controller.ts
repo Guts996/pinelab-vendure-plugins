@@ -22,9 +22,9 @@ import {
   RequestContextService,
   UserInputError,
 } from '@vendure/core';
-import { pdfDownloadPermission } from './pdf-template-admin-resolver';
 import { PLUGIN_INIT_OPTIONS } from '../constants';
 import { PDFTemplatePluginOptions } from '../order-pdfs-plugin';
+import { DownloadPdf } from './order-pdfs-permissions';
 
 @Controller('order-pdf')
 export class OrderPDFsController {
@@ -34,9 +34,9 @@ export class OrderPDFsController {
     private readonly entityHydrator: EntityHydrator,
     private readonly requestContextService: RequestContextService,
     @Inject(PLUGIN_INIT_OPTIONS) private config: PDFTemplatePluginOptions
-  ) {}
+  ) { }
 
-  @Allow(pdfDownloadPermission.Permission)
+  @Allow(DownloadPdf.Permission)
   @Post('/preview/')
   async preview(
     @Ctx() ctx: RequestContext,
@@ -61,7 +61,7 @@ export class OrderPDFsController {
     return stream.pipe(res);
   }
 
-  @Allow(pdfDownloadPermission.Permission)
+  @Allow(DownloadPdf.Permission)
   @Get('/download/:templateId/')
   async download(
     @Ctx() ctx: RequestContext,
